@@ -45,6 +45,11 @@
 #include <getopt.h>
 #endif
 
+#ifdef __VMS
+#include <stdbool.h>
+#define _BSD44_CURSES 1
+#endif
+
 #ifdef HAVE_NCURSES_H
 #include <ncurses.h>
 #else
@@ -65,6 +70,8 @@
 #include <termio.h>
 #endif
 
+#include "vt320-font.h"
+
 /* Matrix typedef */
 typedef struct cmatrix {
     int val;
@@ -79,6 +86,7 @@ cmatrix **matrix = (cmatrix **) NULL;
 int *length = NULL;  /* Length of cols in each line */
 int *spaces = NULL;  /* Spaces left to fill */
 int *updates = NULL; /* What does this do again? */
+int vt320 = 0;
 #ifndef _WIN32
 volatile sig_atomic_t signal_status = 0; /* Indicates a caught signal */
 #endif
@@ -96,7 +104,9 @@ int va_system(char *str, ...) {
 
 /* What we do when we're all set to exit */
 void finish(void) {
+#ifndef __VMS
     curs_set(1);
+#endif
     clear();
     refresh();
     resetty();
@@ -108,6 +118,9 @@ void finish(void) {
         va_system("setfont");
 #endif
     }
+    if (vt320) {
+        printf("\x1bP1;1;2{ @\x1b\\");
+    }
     exit(0);
 }
 
@@ -116,7 +129,9 @@ void c_die(char *msg, ...) {
 
     va_list ap;
 
+#ifndef __VMS
     curs_set(1);
+#endif
     clear();
     refresh();
     resetty();
@@ -137,7 +152,7 @@ void c_die(char *msg, ...) {
 }
 
 void usage(void) {
-    printf(" Usage: cmatrix -[abBcfhlsmVxk] [-u delay] [-C color] [-t tty] [-M message]\n");
+    printf(" Usage: cmatrix -[abBcfhlsmVxk3] [-u delay] [-C color] [-t tty] [-M message]\n");
     printf(" -a: Asynchronous scroll\n");
     printf(" -b: Bold characters on\n");
     printf(" -B: All bold characters (overrides -b)\n");
@@ -158,6 +173,7 @@ void usage(void) {
     printf(" -m: lambda mode\n");
     printf(" -k: Characters change while scrolling. (Works without -o opt.)\n");
     printf(" -t [tty]: Set tty to use\n");
+    printf(" -3: Load VT320 soft font\n");
 }
 
 void version(void) {
@@ -247,7 +263,7 @@ void resize_screen(void) {
     hStdHandle = GetStdHandle(STD_OUTPUT_HANDLE);
     if(hStdHandle == INVALID_HANDLE_VALUE)
         return;
-#else
+#elif !defined(__VMS)
     char *tty;
     int fd = 0;
     int result = 0;
@@ -263,7 +279,7 @@ void resize_screen(void) {
         return;
     LINES = csbiInfo.dwSize.Y;
     COLS = csbiInfo.dwSize.X;
-#else
+#elif !defined(__VMS)
     }
     fd = open(tty, O_RDWR);
     if (fd == -1) {
@@ -313,7 +329,9 @@ int main(int argc, char *argv[]) {
     int random = 0;
     int update = 4;
     int highnum = 0;
+#ifndef __VMS
     int mcolor = COLOR_GREEN;
+#endif
     int rainbow = 0;
     int lambda = 0;
     int randnum = 0;
@@ -329,7 +347,7 @@ int main(int argc, char *argv[]) {
 
     /* Many thanks to morph- (morph@jmss.com) for this getopt patch */
     opterr = 0;
-    while ((optchr = getopt(argc, argv, "abBcfhlLnrosmxkVM:u:C:t:")) != EOF) {
+    while ((optchr = getopt(argc, argv, "abBcfhlLnrosmxkVM:u:C:t:3")) != EOF) {
         switch (optchr) {
         case 's':
             screensaver = 1;
@@ -346,6 +364,7 @@ int main(int argc, char *argv[]) {
             bold = 2;
             break;
         case 'C':
+#ifndef __VMS
             if (!strcasecmp(optarg, "green")) {
                 mcolor = COLOR_GREEN;
             } else if (!strcasecmp(optarg, "red")) {
@@ -367,6 +386,7 @@ int main(int argc, char *argv[]) {
                        "colors are green, red, blue, "
                        "white, yellow, cyan, magenta " "and black.\n");
             }
+#endif
             break;
         case 'c':
             classic = 1;
@@ -418,7 +438,15 @@ int main(int argc, char *argv[]) {
         case 't':
             tty = optarg;
             break;
+        case '3':
+            vt320 = 1;
+            break;
         }
+    }
+
+    if (vt320) {
+        // define soft font (note: don't use printf due to '%')
+        fputs(vt320_font, stdout);
     }
 
     if (force && strcmp("linux", getenv("TERM"))) {
@@ -429,6 +457,7 @@ int main(int argc, char *argv[]) {
         setenv("TERM", "linux", 1);
 #endif
     }
+#ifndef __VMS
     if (tty) {
         FILE *ftty = fopen(tty, "r+");
         if (!ftty) {
@@ -442,6 +471,7 @@ int main(int argc, char *argv[]) {
             exit(EXIT_FAILURE);
         set_term(ttyscr);
     } else
+#endif
         initscr();
     savetty();
     nonl();
@@ -451,9 +481,15 @@ int main(int argc, char *argv[]) {
     cbreak();
 #endif
     noecho();
+#ifdef __VMS
+    nodelay(stdscr, TRUE);
+#else
     timeout(0);
+#endif
     leaveok(stdscr, TRUE);
+#ifndef __VMS
     curs_set(0);
+#endif
 #ifndef _WIN32
     signal(SIGINT, sighandler);
     signal(SIGQUIT, sighandler);
@@ -478,6 +514,8 @@ if (console) {
         c_die(" Unable to use both \"setfont\" and \"consolechars\".\n");
 #endif
 }
+
+#ifndef __VMS
     if (has_colors()) {
         start_color();
         /* Add in colors, if available */
@@ -505,6 +543,7 @@ if (console) {
             init_pair(COLOR_YELLOW, COLOR_YELLOW, COLOR_BLACK);
         }
     }
+#endif
 
     /* Set up values for random number generation */
     if(classic) {
@@ -514,6 +553,9 @@ if (console) {
     } else if (console || xwindow) {
         randmin = 166;
         highnum = 217;
+    } else if (vt320) {
+        randmin = 33;
+        highnum = 126;
     } else {
         randmin = 33;
         highnum = 123;
@@ -546,6 +588,9 @@ if (console) {
             count = 1;
         }
 
+#ifdef __VMS
+        refresh();  // flush the output
+#endif
         if ((keypress = wgetch(stdscr)) != ERR) {
             if (screensaver == 1) {
 #ifdef USE_TIOCSTI
@@ -597,6 +642,7 @@ if (console) {
                 case '9':
                     update = keypress - 48;
                     break;
+#ifndef __VMS
                 case '!':
                     mcolor = COLOR_RED;
                     rainbow = 0;
@@ -617,12 +663,14 @@ if (console) {
                     mcolor = COLOR_MAGENTA;
                     rainbow = 0;
                     break;
+#endif
                 case 'r':
                      rainbow = 1;
                      break;
                 case 'm':
                      lambda = !lambda;
                      break;
+#ifndef __VMS
                 case '^':
                     mcolor = COLOR_CYAN;
                     rainbow = 0;
@@ -631,6 +679,7 @@ if (console) {
                     mcolor = COLOR_WHITE;
                     rainbow = 0;
                     break;
+#endif
                 case 'p':
                 case 'P':
                     pause = (pause == 0)?1:0;
@@ -751,7 +800,9 @@ if (console) {
                     if (console || xwindow) {
                         attron(A_ALTCHARSET);
                     }
+#ifndef __VMS
                     attron(COLOR_PAIR(COLOR_WHITE));
+#endif
                     if (bold) {
                         attron(A_BOLD);
                     }
@@ -767,7 +818,9 @@ if (console) {
                         addch(matrix[i][j].val);
                     }
 
+#ifndef __VMS
                     attroff(COLOR_PAIR(COLOR_WHITE));
+#endif
                     if (bold) {
                         attroff(A_BOLD);
                     }
@@ -775,6 +828,7 @@ if (console) {
                         attroff(A_ALTCHARSET);
                     }
                 } else {
+#ifndef __VMS
                     if(rainbow) {
                         int randomColor = rand() % 6;
 
@@ -800,6 +854,7 @@ if (console) {
                        }
                     }
                     attron(COLOR_PAIR(mcolor));
+#endif
                     if (matrix[i][j].val == 1) {
                         if (bold) {
                             attron(A_BOLD);
@@ -831,7 +886,9 @@ if (console) {
                             attroff(A_ALTCHARSET);
                         }
                     }
+#ifndef __VMS
                     attroff(COLOR_PAIR(mcolor));
+#endif
                 }
             }
         }
@@ -862,7 +919,11 @@ if (console) {
                 addch(' ');
         }
 
+#ifdef __VMS
+        usleep(update * 10000);     // missing napms()
+#else
         napms(update * 10);
+#endif
     }
     finish();
 }
